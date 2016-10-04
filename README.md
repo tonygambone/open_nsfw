@@ -1,6 +1,14 @@
 # Open nsfw model
 This repo contains code for running Not Suitable for Work (NSFW) classification deep neural network Caffe models. Please refer our [blog](https://yahooeng.tumblr.com/post/151148689421/open-sourcing-a-deep-learning-solution-for) post which describes this work and experiments in more detail.
 
+# About this fork
+
+This fork of the original code from Yahoo adds the following features:
+* classify_nsfw command now accepts multiple files or directories to scan
+* Classification progress stored in a sqlite3 database, so it is restartable if interrupted
+* Simple web app (`python serve.py`) that displays the images from the database with the highest score
+* Web app also allows images to be marked as SFW in the database (for false positives)
+
 #### Not suitable for work classifier
 Detecting offensive / adult images is an important problem which researchers have tackled for decades. With the evolution of computer vision and deep learning the algorithms have matured and we are now able to classify an image as not suitable for work with greater precision.
 
