@@ -14,7 +14,8 @@ import time
 from PIL import Image
 from StringIO import StringIO
 import caffe
-
+import re
+import sqlite3
 
 def resize_image(data, sz=(256, 256)):
     """
@@ -86,8 +87,9 @@ def main(argv):
     parser = argparse.ArgumentParser()
     # Required arguments: input file.
     parser.add_argument(
-        "input_file",
-        help="Path to the input image file"
+        "input_files",
+        nargs='+',
+        help="Path to the input image file(s) or directorie(s)"
     )
 
     # Optional arguments.
@@ -101,7 +103,6 @@ def main(argv):
     )
 
     args = parser.parse_args()
-    image_data = open(args.input_file).read()
 
     # Pre-load caffe model.
     nsfw_net = caffe.Net(args.model_def,  # pylint: disable=invalid-name
@@ -115,14 +116,55 @@ def main(argv):
     caffe_transformer.set_raw_scale('data', 255)  # rescale from [0, 1] to [0, 255]
     caffe_transformer.set_channel_swap('data', (2, 1, 0))  # swap channels from RGB to BGR
 
+    filetest = re.compile(".*\.(jpg|gif|png)$", re.IGNORECASE)
+
+    # Open db connection
+    conn = sqlite3.connect('files.db')
+    conn.cursor().execute("create table if not exists file_scores (filename text primary key, score real, valid integer, error integer default 0, confirmed integer default -1)")
+
+    # Read files
+    files = []
+    for input_file in args.input_files:
+        if os.path.isfile(input_file):
+            process_file(input_file, filetest, conn, caffe_transformer, nsfw_net)
+        else:
+            for (dirpath, dirnames, filenames) in os.walk(input_file):
+                for filename in filenames:
+                    process_file(os.path.join(dirpath, filename), filetest, conn, caffe_transformer, nsfw_net)
+    count = conn.cursor().execute("select count(1) from file_scores where valid = 1").fetchone()
+    print "Done. Total files scored: %d" % count
+    conn.close()
+
+def process_file(f, filetest, conn, caffe_transformer, nsfw_net):
+    cursor = conn.cursor()
+    cursor.execute("select 1 from file_scores where filename = ?", [f])
+    if cursor.fetchone():
+        # already processed
+        return
+    if filetest.search(f) is None:
+        # not an image file
+        cursor.execute("insert into file_scores (filename, valid) values (?, 0)", [f])
+        conn.commit()
+        return
+    image_data = open(f).read()
+
     # Classify.
-    scores = caffe_preprocess_and_compute(image_data, caffe_transformer=caffe_transformer, caffe_net=nsfw_net, output_layers=['prob'])
+    try:
+        scores = caffe_preprocess_and_compute(image_data, caffe_transformer=caffe_transformer, caffe_net=nsfw_net, output_layers=['prob'])
+    except IOError:
+        # does not contain image data
+        print "Error occurred on file %s" % f
+        cursor.execute("insert into file_scores (filename, valid, error) values (?, 0, 1)", [f])
+        conn.commit()
+        return
 
     # Scores is the array containing SFW / NSFW image probabilities
     # scores[1] indicates the NSFW probability
-    print "NSFW score:  " , scores[1]
-
-
+    # print it if it's interesting (>0.75)
+    if scores[1] > 0.75:
+        print "%s: %f" % (f, scores[1])
+    cursor.execute("insert into file_scores (filename, score, valid) values (?, ?, 1)", [f, scores[1]])
+    conn.commit()
 
 if __name__ == '__main__':
     main(sys.argv)
